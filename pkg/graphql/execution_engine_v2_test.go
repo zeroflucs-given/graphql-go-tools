@@ -1817,6 +1817,273 @@ func TestExecutionWithOptions(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestExecutionEngineV2_OperationMiddlewareOrder(t *testing.T) {
+	closer := make(chan struct{})
+	defer close(closer)
+
+	var calls []string
+
+	mws := []OperationMiddleware{
+		func(next OperationHandler) OperationHandler {
+			calls = append(calls, "first")
+			return next
+		},
+		func(next OperationHandler) OperationHandler {
+			calls = append(calls, "second")
+			return next
+		},
+	}
+
+	testCase := ExecutionEngineV2TestCase{
+		schema:    starwarsSchema(t),
+		operation: loadStarWarsQuery(starwars.FileSimpleHeroQuery, nil),
+		dataSources: []plan.DataSourceConfiguration{
+			{
+				RootNodes: []plan.TypeField{
+					{
+						TypeName:   "Query",
+						FieldNames: []string{"hero"},
+					},
+				},
+				ChildNodes: []plan.TypeField{
+					{
+						TypeName:   "Character",
+						FieldNames: []string{"name"},
+					},
+				},
+				Factory: &graphql_datasource.Factory{
+					HTTPClient: testNetHttpClient(t, roundTripperTestCase{
+						expectedHost:     "example.com",
+						expectedPath:     "/",
+						expectedBody:     "",
+						sendResponseBody: `{"data":{"hero":{"name":"Luke Skywalker"}}}`,
+						sendStatusCode:   200,
+					}),
+				},
+				Custom: graphql_datasource.ConfigJson(graphql_datasource.Configuration{
+					Fetch: graphql_datasource.FetchConfiguration{
+						URL:    "https://example.com/",
+						Method: "GET",
+					},
+				}),
+			},
+		},
+		fields:           []plan.FieldConfiguration{},
+		expectedResponse: `{"data":{"hero":{"name":"Luke Skywalker"}}}`,
+	}
+
+	engineConf := NewEngineV2Configuration(testCase.schema)
+	engineConf.SetDataSources(testCase.dataSources)
+	engineConf.SetFieldConfigurations(testCase.fields)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	engine, err := NewExecutionEngineV2(ctx, abstractlogger.Noop{}, engineConf)
+	require.NoError(t, err)
+
+	for _, mw := range mws {
+		engine.UseOperation(mw)
+	}
+
+	before := &beforeFetchHook{}
+	after := &afterFetchHook{}
+
+	operation := testCase.operation(t)
+	resultWriter := NewEngineResultWriter()
+	err = engine.Execute(context.Background(), &operation, &resultWriter, WithBeforeFetchHook(before), WithAfterFetchHook(after))
+
+	assert.Equal(t, `{"method":"GET","url":"https://example.com/","body":{"query":"{hero {__typename name}}"}}`, before.input)
+	assert.Equal(t, `{"hero":{"name":"Luke Skywalker"}}`, after.data)
+
+	assert.Equal(t, []string{"first", "second"}, calls)
+	assert.Equal(t, testCase.expectedResponse, resultWriter.String())
+	assert.NoError(t, err)
+}
+
+func TestExecutionEngineV2_OperationMiddlewareAuthValid(t *testing.T) {
+	closer := make(chan struct{})
+	defer close(closer)
+
+	type key struct{}
+	var userRoleKey key
+
+	mws := []OperationMiddleware{
+		func(next OperationHandler) OperationHandler {
+			return func(ctx context.Context, operation *Request, writer resolve.FlushWriter) error {
+				currentUserRole := ctx.Value(userRoleKey).(string)
+				if currentUserRole != "admin" {
+					pair := resolve.NewBufPair()
+					pair.WriteErr([]byte("errorMessage"), nil, nil, nil)
+					_, _ = writer.Write([]byte(`{"errors":[{"message":"access denied"}]}`))
+					return nil
+				} else {
+					return next(ctx, operation, writer)
+				}
+			}
+		},
+	}
+
+	testCase := ExecutionEngineV2TestCase{
+		schema:    starwarsSchema(t),
+		operation: loadStarWarsQuery(starwars.FileSimpleHeroQuery, nil),
+		dataSources: []plan.DataSourceConfiguration{
+			{
+				RootNodes: []plan.TypeField{
+					{
+						TypeName:   "Query",
+						FieldNames: []string{"hero"},
+					},
+				},
+				ChildNodes: []plan.TypeField{
+					{
+						TypeName:   "Character",
+						FieldNames: []string{"name"},
+					},
+				},
+				Factory: &graphql_datasource.Factory{
+					HTTPClient: testNetHttpClient(t, roundTripperTestCase{
+						expectedHost:     "example.com",
+						expectedPath:     "/",
+						expectedBody:     "",
+						sendResponseBody: `{"data":{"hero":{"name":"Luke Skywalker"}}}`,
+						sendStatusCode:   200,
+					}),
+				},
+				Custom: graphql_datasource.ConfigJson(graphql_datasource.Configuration{
+					Fetch: graphql_datasource.FetchConfiguration{
+						URL:    "https://example.com/",
+						Method: "GET",
+					},
+				}),
+			},
+		},
+		fields:           []plan.FieldConfiguration{},
+		expectedResponse: `{"data":{"hero":{"name":"Luke Skywalker"}}}`,
+	}
+
+	engineConf := NewEngineV2Configuration(testCase.schema)
+	engineConf.SetDataSources(testCase.dataSources)
+	engineConf.SetFieldConfigurations(testCase.fields)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	engine, err := NewExecutionEngineV2(ctx, abstractlogger.Noop{}, engineConf)
+	require.NoError(t, err)
+
+	for _, mw := range mws {
+		engine.UseOperation(mw)
+	}
+
+	before := &beforeFetchHook{}
+	after := &afterFetchHook{}
+
+	operation := testCase.operation(t)
+	resultWriter := NewEngineResultWriter()
+	authCtx := context.WithValue(context.Background(), userRoleKey, "admin")
+	err = engine.Execute(authCtx, &operation, &resultWriter, WithBeforeFetchHook(before), WithAfterFetchHook(after))
+
+	assert.Equal(t, `{"method":"GET","url":"https://example.com/","body":{"query":"{hero {__typename name}}"}}`, before.input)
+	assert.Equal(t, `{"hero":{"name":"Luke Skywalker"}}`, after.data)
+	assert.Equal(t, "", after.err)
+
+	assert.Equal(t, testCase.expectedResponse, resultWriter.String())
+	assert.NoError(t, err)
+}
+
+func TestExecutionEngineV2_OperationMiddlewareAuthInvalid(t *testing.T) {
+	closer := make(chan struct{})
+	defer close(closer)
+
+	type key struct{}
+	var userRoleKey key
+
+	mws := []OperationMiddleware{
+		func(next OperationHandler) OperationHandler {
+			return func(ctx context.Context, operation *Request, writer resolve.FlushWriter) error {
+				currentUserRole := ctx.Value(userRoleKey).(string)
+				if currentUserRole != "admin" {
+					pair := resolve.NewBufPair()
+					pair.WriteErr([]byte("errorMessage"), nil, nil, nil)
+					_, _ = writer.Write([]byte(`{"errors":[{"message":"access denied"}]}`))
+					return nil
+				} else {
+					return next(ctx, operation, writer)
+				}
+			}
+		},
+	}
+
+	testCase := ExecutionEngineV2TestCase{
+		schema:    starwarsSchema(t),
+		operation: loadStarWarsQuery(starwars.FileSimpleHeroQuery, nil),
+		dataSources: []plan.DataSourceConfiguration{
+			{
+				RootNodes: []plan.TypeField{
+					{
+						TypeName:   "Query",
+						FieldNames: []string{"hero"},
+					},
+				},
+				ChildNodes: []plan.TypeField{
+					{
+						TypeName:   "Character",
+						FieldNames: []string{"name"},
+					},
+				},
+				Factory: &graphql_datasource.Factory{
+					HTTPClient: testNetHttpClient(t, roundTripperTestCase{
+						expectedHost:     "example.com",
+						expectedPath:     "/",
+						expectedBody:     "",
+						sendResponseBody: `{"data":{"hero":{"name":"Luke Skywalker"}}}`,
+						sendStatusCode:   200,
+					}),
+				},
+				Custom: graphql_datasource.ConfigJson(graphql_datasource.Configuration{
+					Fetch: graphql_datasource.FetchConfiguration{
+						URL:    "https://example.com/",
+						Method: "GET",
+					},
+				}),
+			},
+		},
+		fields:           []plan.FieldConfiguration{},
+		expectedResponse: `{"errors":[{"message":"access denied"}]}`,
+	}
+
+	engineConf := NewEngineV2Configuration(testCase.schema)
+	engineConf.SetDataSources(testCase.dataSources)
+	engineConf.SetFieldConfigurations(testCase.fields)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	engine, err := NewExecutionEngineV2(ctx, abstractlogger.Noop{}, engineConf)
+	require.NoError(t, err)
+
+	for _, mw := range mws {
+		engine.UseOperation(mw)
+	}
+
+	before := &beforeFetchHook{}
+	after := &afterFetchHook{}
+
+	operation := testCase.operation(t)
+	resultWriter := NewEngineResultWriter()
+	authCtx := context.WithValue(context.Background(), userRoleKey, "user")
+	err = engine.Execute(authCtx, &operation, &resultWriter, WithBeforeFetchHook(before), WithAfterFetchHook(after))
+
+	// before and after hooks should never execute
+	assert.Equal(t, "", before.input)
+	assert.Equal(t, "", after.data)
+	assert.Equal(t, "", after.err)
+
+	assert.Equal(t, testCase.expectedResponse, resultWriter.String())
+	assert.NoError(t, err)
+}
+
 func TestExecutionEngineV2_GetCachedPlan(t *testing.T) {
 	schema, err := NewSchemaFromString(testSubscriptionDefinition)
 	require.NoError(t, err)
