@@ -282,8 +282,16 @@ func (e *ExecutionEngineV2) Execute(ctx context.Context, operation *Request, wri
 	return operationHandler(ctx, operation, writer)
 }
 
-func (e *ExecutionEngineV2) UseOperation(mw OperationMiddleware) {
+func (e *ExecutionEngineV2) UseOperationMiddleware(mw OperationMiddleware) {
 	e.operationMiddleware = processOperationMiddleware(e.operationMiddleware, mw)
+}
+
+func (e *ExecutionEngineV2) UseResolverMiddleware(mw resolve.ResolverMiddleware) {
+	e.resolver.UseResolverMiddleware(mw)
+}
+
+func (e *ExecutionEngineV2) UseResponseMiddleware(mw resolve.ResponseMiddleware) {
+	e.resolver.UseResponseMiddleware(mw)
 }
 
 func (e *ExecutionEngineV2) getCachedPlan(ctx *internalExecutionContext, operation, definition *ast.Document, operationName string, report *operationreport.Report) plan.Plan {

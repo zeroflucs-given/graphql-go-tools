@@ -316,18 +316,25 @@ type SubscriptionDataSource interface {
 	Start(ctx context.Context, input []byte, next chan<- []byte) error
 }
 
+type ResolverHandler func(ctx *Context, response *GraphQLResponse, data []byte, writer io.Writer) error
+type ResolverMiddleware func(next ResolverHandler) ResolverHandler
+type ResponseHandler func(ctx context.Context, buf *BufPair, writer io.Writer, ignoreData bool) error
+type ResponseMiddleware func(next ResponseHandler) ResponseHandler
+
 type Resolver struct {
-	ctx               context.Context
-	dataLoaderEnabled bool
-	resultSetPool     sync.Pool
-	byteSlicesPool    sync.Pool
-	waitGroupPool     sync.Pool
-	bufPairPool       sync.Pool
-	bufPairSlicePool  sync.Pool
-	errChanPool       sync.Pool
-	hash64Pool        sync.Pool
-	dataloaderFactory *dataLoaderFactory
-	fetcher           *Fetcher
+	ctx                context.Context
+	dataLoaderEnabled  bool
+	resultSetPool      sync.Pool
+	byteSlicesPool     sync.Pool
+	waitGroupPool      sync.Pool
+	bufPairPool        sync.Pool
+	bufPairSlicePool   sync.Pool
+	errChanPool        sync.Pool
+	hash64Pool         sync.Pool
+	dataloaderFactory  *dataLoaderFactory
+	fetcher            *Fetcher
+	resolverMiddleware ResolverMiddleware
+	responseMiddleware ResponseMiddleware
 }
 
 type inflightFetch struct {
@@ -384,10 +391,20 @@ func New(ctx context.Context, fetcher *Fetcher, enableDataLoader bool) *Resolver
 				return xxhash.New()
 			},
 		},
-		dataloaderFactory: newDataloaderFactory(fetcher),
-		fetcher:           fetcher,
-		dataLoaderEnabled: enableDataLoader,
+		dataloaderFactory:  newDataloaderFactory(fetcher),
+		fetcher:            fetcher,
+		dataLoaderEnabled:  enableDataLoader,
+		resolverMiddleware: procesResolverMiddleware(),
+		responseMiddleware: processResponseMiddleware(),
 	}
+}
+
+func (r *Resolver) UseResolverMiddleware(mw ResolverMiddleware) {
+	r.resolverMiddleware = procesResolverMiddleware(r.resolverMiddleware, mw)
+}
+
+func (r *Resolver) UseResponseMiddleware(mw ResponseMiddleware) {
+	r.responseMiddleware = processResponseMiddleware(r.responseMiddleware, mw)
 }
 
 func (r *Resolver) resolveNode(ctx *Context, node Node, data []byte, bufPair *BufPair) (err error) {
@@ -473,40 +490,48 @@ func extractResponse(responseData []byte, bufPair *BufPair, cfg ProcessResponseC
 }
 
 func (r *Resolver) ResolveGraphQLResponse(ctx *Context, response *GraphQLResponse, data []byte, writer io.Writer) (err error) {
+	resolverHandler := r.resolverMiddleware(func(ctx *Context, response *GraphQLResponse, data []byte, writer io.Writer) error {
+		buf := r.getBufPair()
+		defer r.freeBufPair(buf)
 
-	buf := r.getBufPair()
-	defer r.freeBufPair(buf)
+		responseBuf := r.getBufPair()
+		defer r.freeBufPair(responseBuf)
 
-	responseBuf := r.getBufPair()
-	defer r.freeBufPair(responseBuf)
+		extractResponse(data, responseBuf, ProcessResponseConfig{ExtractGraphqlResponse: true})
 
-	extractResponse(data, responseBuf, ProcessResponseConfig{ExtractGraphqlResponse: true})
-
-	if data != nil {
-		ctx.lastFetchID = initialValueID
-	}
-
-	if r.dataLoaderEnabled {
-		ctx.dataLoader = r.dataloaderFactory.newDataLoader(responseBuf.Data.Bytes())
-		defer func() {
-			r.dataloaderFactory.freeDataLoader(ctx.dataLoader)
-			ctx.dataLoader = nil
-		}()
-	}
-
-	ignoreData := false
-	err = r.resolveNode(ctx, response.Data, responseBuf.Data.Bytes(), buf)
-	if err != nil {
-		if !errors.Is(err, errNonNullableFieldValueIsNull) {
-			return
+		if data != nil {
+			ctx.lastFetchID = initialValueID
 		}
-		ignoreData = true
-	}
-	if responseBuf.Errors.Len() > 0 {
-		r.MergeBufPairErrors(responseBuf, buf)
-	}
 
-	return writeGraphqlResponse(buf, writer, ignoreData)
+		if r.dataLoaderEnabled {
+			ctx.dataLoader = r.dataloaderFactory.newDataLoader(responseBuf.Data.Bytes())
+			defer func() {
+				r.dataloaderFactory.freeDataLoader(ctx.dataLoader)
+				ctx.dataLoader = nil
+			}()
+		}
+
+		ignoreData := false
+		err = r.resolveNode(ctx, response.Data, responseBuf.Data.Bytes(), buf)
+		if err != nil {
+			if !errors.Is(err, errNonNullableFieldValueIsNull) {
+				return err
+			}
+			ignoreData = true
+		}
+		if responseBuf.Errors.Len() > 0 {
+			r.MergeBufPairErrors(responseBuf, buf)
+		}
+
+		responseHandler := r.responseMiddleware(func(ctx context.Context, buf *BufPair, writer io.Writer, ignoreData bool) error {
+			return writeGraphqlResponse(buf, writer, ignoreData)
+		})
+
+		return responseHandler(ctx.Context, buf, writer, ignoreData)
+	})
+
+	return resolverHandler(ctx, response, data, writer)
+
 }
 
 func writeAndFlush(writer FlushWriter, msg []byte) error {
@@ -519,7 +544,6 @@ func writeAndFlush(writer FlushWriter, msg []byte) error {
 }
 
 func (r *Resolver) ResolveGraphQLSubscription(ctx *Context, subscription *GraphQLSubscription, writer FlushWriter) (err error) {
-
 	buf := r.getBufPair()
 	err = subscription.Trigger.InputTemplate.Render(ctx, nil, buf.Data)
 	if err != nil {
@@ -1723,4 +1747,36 @@ func writeSafe(err error, writer io.Writer, data []byte) error {
 	}
 	_, err = writer.Write(data)
 	return err
+}
+
+func procesResolverMiddleware(middlewares ...ResolverMiddleware) ResolverMiddleware {
+	middleware := ResolverMiddleware(func(next ResolverHandler) ResolverHandler {
+		return next
+	})
+
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		previousMW := middleware
+		currentMW := middlewares[i]
+		middleware = func(next ResolverHandler) ResolverHandler {
+			return previousMW(currentMW(next))
+		}
+	}
+
+	return middleware
+}
+
+func processResponseMiddleware(middlewares ...ResponseMiddleware) ResponseMiddleware {
+	middleware := ResponseMiddleware(func(next ResponseHandler) ResponseHandler {
+		return next
+	})
+
+	for i := len(middlewares) - 1; i >= 0; i-- {
+		previousMW := middleware
+		currentMW := middlewares[i]
+		middleware = func(next ResponseHandler) ResponseHandler {
+			return previousMW(currentMW(next))
+		}
+	}
+
+	return middleware
 }

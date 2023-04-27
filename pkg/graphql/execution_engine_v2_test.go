@@ -1883,7 +1883,7 @@ func TestExecutionEngineV2_OperationMiddlewareOrder(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, mw := range mws {
-		engine.UseOperation(mw)
+		engine.UseOperationMiddleware(mw)
 	}
 
 	before := &beforeFetchHook{}
@@ -1973,7 +1973,7 @@ func TestExecutionEngineV2_OperationMiddlewareAuthValid(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, mw := range mws {
-		engine.UseOperation(mw)
+		engine.UseOperationMiddleware(mw)
 	}
 
 	before := &beforeFetchHook{}
@@ -2064,7 +2064,7 @@ func TestExecutionEngineV2_OperationMiddlewareAuthInvalid(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, mw := range mws {
-		engine.UseOperation(mw)
+		engine.UseOperationMiddleware(mw)
 	}
 
 	before := &beforeFetchHook{}

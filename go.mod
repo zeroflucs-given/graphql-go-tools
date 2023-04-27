@@ -15,7 +15,7 @@ require (
 	github.com/go-zookeeper/zk v1.0.2
 	github.com/gobwas/ws v1.0.4
 	github.com/golang/mock v1.4.1
-	github.com/google/go-cmp v0.5.8
+	github.com/google/go-cmp v0.5.9
 	github.com/gorilla/websocket v1.5.0
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/iancoleman/strcase v0.0.0-20191112232945-16388991a334
@@ -31,7 +31,7 @@ require (
 	github.com/sebdah/goldie/v2 v2.5.3
 	github.com/spf13/cobra v0.0.5
 	github.com/spf13/viper v1.3.2
-	github.com/stretchr/testify v1.7.1
+	github.com/stretchr/testify v1.8.2
 	github.com/tidwall/gjson v1.11.0
 	github.com/tidwall/sjson v1.0.4
 	github.com/vektah/gqlparser/v2 v2.4.6
@@ -110,6 +110,6 @@ require (
 	golang.org/x/sys v0.1.0 // indirect
 	golang.org/x/text v0.3.7 // indirect
 	gopkg.in/cenkalti/backoff.v1 v1.1.0 // indirect
-	gopkg.in/yaml.v3 v3.0.0-20210107192922-496545a6307b // indirect
+	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gotest.tools v2.2.0+incompatible // indirect
 )
