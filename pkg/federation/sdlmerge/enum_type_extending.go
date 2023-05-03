@@ -44,7 +44,7 @@ func (e *extendEnumTypeDefinitionVisitor) EnterEnumTypeExtension(ref int) {
 		hasExtended = true
 	}
 
-	if !hasExtended {
-		e.StopWithExternalErr(operationreport.ErrExtensionOrphansMustResolveInSupergraph(e.document.EnumTypeExtensionNameBytes(ref)))
-	}
+	// if !hasExtended {
+	// 	e.StopWithExternalErr(operationreport.ErrExtensionOrphansMustResolveInSupergraph(e.document.EnumTypeExtensionNameBytes(ref)))
+	// }
 }

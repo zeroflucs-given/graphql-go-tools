@@ -44,7 +44,7 @@ func (e *extendUnionTypeDefinitionVisitor) EnterUnionTypeExtension(ref int) {
 		hasExtended = true
 	}
 
-	if !hasExtended {
-		e.StopWithExternalErr(operationreport.ErrExtensionOrphansMustResolveInSupergraph(e.document.UnionTypeExtensionNameBytes(ref)))
-	}
+	// if !hasExtended {
+	// 	e.StopWithExternalErr(operationreport.ErrExtensionOrphansMustResolveInSupergraph(e.document.UnionTypeExtensionNameBytes(ref)))
+	// }
 }
