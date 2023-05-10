@@ -327,7 +327,7 @@ func TestPlanner_Plan(t *testing.T) {
 										Fields: []*resolve.Field{
 											{
 												Name: []byte("info"),
-												Value: &resolve.String{
+												Value: &resolve.Passthrough{
 													Path:                 []string{"info"},
 													UnescapeResponseJson: true,
 												},
@@ -372,7 +372,7 @@ func TestPlanner_Plan(t *testing.T) {
 												Name: []byte("infos"),
 												Value: &resolve.Array{
 													Path: []string{"infos"},
-													Item: &resolve.String{
+													Item: &resolve.Passthrough{
 														UnescapeResponseJson: true,
 													},
 												},
@@ -418,7 +418,7 @@ func TestPlanner_Plan(t *testing.T) {
 										Fields: []*resolve.Field{
 											{
 												Name: []byte("info"),
-												Value: &resolve.String{
+												Value: &resolve.Passthrough{
 													Path:                 []string{"info"},
 													UnescapeResponseJson: false,
 												},

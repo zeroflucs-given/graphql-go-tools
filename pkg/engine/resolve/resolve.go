@@ -95,6 +95,7 @@ const (
 	NodeKindBoolean
 	NodeKindInteger
 	NodeKindFloat
+	NodeKindPassthrough
 
 	FetchKindSingle FetchKind = iota + 1
 	FetchKindParallel
@@ -427,6 +428,8 @@ func (r *Resolver) resolveNode(ctx *Context, node Node, data []byte, bufPair *Bu
 		return r.resolveInteger(ctx, n, data, bufPair)
 	case *Float:
 		return r.resolveFloat(ctx, n, data, bufPair)
+	case *Passthrough:
+		return r.resolvePassthrough(ctx, n, data, bufPair)
 	case *EmptyObject:
 		r.resolveEmptyObject(bufPair.Data)
 		return
@@ -942,6 +945,32 @@ func (r *Resolver) resolveBoolean(ctx *Context, boolean *Boolean, data []byte, b
 	}
 	booleanBuf.Data.WriteBytes(value)
 	r.exportField(ctx, boolean.Export, value)
+	return nil
+}
+
+func (r *Resolver) resolvePassthrough(ctx *Context, pt *Passthrough, data []byte, stringBuf *BufPair) error {
+	value, dataType, _, err := jsonparser.Get(data, pt.Path...)
+	if err != nil {
+		return fmt.Errorf("failed to parse passthrough: %w", err)
+	}
+
+	quoteValue := false
+	if dataType == jsonparser.Null && !pt.Nullable {
+		return errNonNullableFieldValueIsNull
+	} else if dataType == jsonparser.String {
+		quoteValue = true
+	}
+	r.exportField(ctx, pt.Export, value)
+
+	if quoteValue {
+		stringBuf.Data.WriteBytes(quote)
+	}
+
+	stringBuf.Data.WriteBytes(value)
+	if quoteValue {
+		stringBuf.Data.WriteBytes(quote)
+	}
+
 	return nil
 }
 
@@ -1480,6 +1509,18 @@ type String struct {
 
 func (_ *String) NodeKind() NodeKind {
 	return NodeKindString
+}
+
+type Passthrough struct {
+	Path                 []string
+	Nullable             bool
+	Export               *FieldExport `json:"export,omitempty"`
+	UnescapeResponseJson bool         `json:"unescape_response_json,omitempty"`
+	IsTypeName           bool         `json:"is_type_name,omitempty"`
+}
+
+func (_ *Passthrough) NodeKind() NodeKind {
+	return NodeKindPassthrough
 }
 
 type Boolean struct {

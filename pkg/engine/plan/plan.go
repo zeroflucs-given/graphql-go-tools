@@ -741,7 +741,7 @@ func (v *Visitor) resolveFieldValue(fieldRef, typeRef int, nullable bool, path [
 					Export:   fieldExport,
 				}
 			default:
-				return &resolve.String{
+				return &resolve.Passthrough{
 					Path:                 path,
 					Nullable:             nullable,
 					Export:               fieldExport,
