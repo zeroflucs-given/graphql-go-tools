@@ -11,6 +11,7 @@ import (
 
 	"github.com/buger/jsonparser"
 
+	"github.com/wundergraph/graphql-go-tools/pkg/auth"
 	"github.com/wundergraph/graphql-go-tools/pkg/lexer/literal"
 )
 
@@ -58,6 +59,11 @@ func Do(client *http.Client, ctx context.Context, requestInput []byte, out io.Wr
 		if err != nil {
 			return err
 		}
+	}
+
+	// Check for a smuggled auth token from the WS init payload and add it to the outgoing HTTP headers if unset
+	if auth.GetAuthorizationToken(ctx) != "" && request.Header.Get("Authorization") == "" {
+		request.Header.Add("Authorization", auth.GetAuthorizationToken(ctx))
 	}
 
 	if queryParams != nil {

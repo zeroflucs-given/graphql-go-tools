@@ -10,6 +10,7 @@ import (
 	"github.com/jensneuse/abstractlogger"
 
 	"github.com/wundergraph/graphql-go-tools/pkg/ast"
+	"github.com/wundergraph/graphql-go-tools/pkg/auth"
 	"github.com/wundergraph/graphql-go-tools/pkg/engine/resolve"
 	"github.com/wundergraph/graphql-go-tools/pkg/graphql"
 )
@@ -28,6 +29,8 @@ const (
 
 	DefaultKeepAliveInterval          = "15s"
 	DefaultSubscriptionUpdateInterval = "1s"
+
+	ContextAuthKey = "Authorization"
 )
 
 // Message defines the actual subscription message wich will be passed from client to server and vice versa.
@@ -198,6 +201,8 @@ func (h *Handler) handleInit(ctx context.Context, payload []byte) (extendedCtx c
 		if extendedCtx, err = h.initFunc(ctx, initPayload); err != nil {
 			return extendedCtx, err
 		}
+		// Smuggle the Authentication token in the context, so it can later be added to HTTP request headers if required
+		extendedCtx = auth.SetAuthorizationToken(extendedCtx, initPayload.Authorization())
 	} else {
 		extendedCtx = ctx
 	}
